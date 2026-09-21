@@ -1,8 +1,0 @@
-torch==2.1.2
-torchvision
-torchaudio
-scikit-learn
-torchsummary
-matplotlib
-pandas
-numpy==1.26.4

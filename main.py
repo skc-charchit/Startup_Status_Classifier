@@ -1,61 +1,92 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 import pickle
-import numpy as np
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis as QDA
+from pathlib import Path
 
-# Load the model and scaler
-model_filename = 'best_model.pkl'
-scaler_filename = 'scaler.pkl'
+import pandas as pd
+import streamlit as st
 
-with open(model_filename, 'rb') as file:
-    loaded_model = pickle.load(file)
+PROJECT_ROOT = Path(__file__).resolve().parent
+DATA_PATH = PROJECT_ROOT / "src" / "data" / "companies.csv"
+MODEL_PATH = PROJECT_ROOT / "src" / "models" / "best_model.pkl"
 
-with open(scaler_filename, 'rb') as file:
-    loaded_scaler = pickle.load(file)
 
-# Define the FastAPI app
-app = FastAPI()
+@st.cache_resource
+def load_model():
+    """Load the complete preprocessing and prediction pipeline once."""
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            "Model file not found. Run 02_Model_Training.ipynb first."
+        )
+    with MODEL_PATH.open("rb") as model_file:
+        return pickle.load(model_file)
 
-# Define a request model for input data
-class Data(BaseModel):
-    id: int
-    Area: float
-    MajorAxisLength: float
-    MinorAxisLength: float
-    Eccentricity: float
-    ConvexArea: float
-    EquivDiameter: float
-    Extent: float
-    Perimeter: float
-    Roundness: float
-    AspectRation: float
 
-# Define a route for predictions
-@app.post("/predict")
-async def predict(data: Data):
-    # Convert input data to a numpy array
-    input_data = np.array([
-        [data.id, data.Area, data.MajorAxisLength, data.MinorAxisLength, data.Eccentricity,
-         data.ConvexArea, data.EquivDiameter, data.Extent, data.Perimeter, data.Roundness,
-         data.AspectRation]
-    ])
+@st.cache_data
+def load_feature_data(feature_columns: tuple[str, ...]) -> pd.DataFrame:
+    """Load the training data to build inputs with the same feature names."""
+    data = pd.read_csv(DATA_PATH)
+    missing_columns = sorted(set(feature_columns) - set(data.columns))
+    if missing_columns:
+        raise ValueError(f"Dataset is missing model features: {missing_columns}")
+    return data[list(feature_columns)]
 
-    # Scale the input data using the loaded scaler
-    scaled_input_data = loaded_scaler.transform(input_data[:, 1:])  # Exclude 'id' column
 
-    # Make a prediction using the loaded model
-    prediction = loaded_model.predict(scaled_input_data)
+def build_prediction_input(feature_data: pd.DataFrame) -> pd.DataFrame:
+    """Collect one beginner-friendly input row from the Streamlit form."""
+    values = {}
+    with st.form("prediction_form"):
+        st.subheader("Company details")
+        for column in feature_data.columns:
+            series = feature_data[column]
+            if pd.api.types.is_numeric_dtype(series):
+                default_value = float(series.median()) if series.notna().any() else 0.0
+                values[column] = st.number_input(
+                    label=column.replace("_", " ").title(),
+                    value=default_value,
+                    format="%.4f",
+                )
+            else:
+                choices = sorted(series.dropna().astype(str).unique().tolist())
+                if len(choices) <= 50 and choices:
+                    values[column] = st.selectbox(
+                        column.replace("_", " ").title(), choices
+                    )
+                else:
+                    values[column] = st.text_input(
+                        column.replace("_", " ").title(), value=""
+                    )
 
-    return {"prediction": int(prediction[0])}
+        submitted = st.form_submit_button("Predict startup status")
 
-# Define a route for model information
-@app.get("/info")
-async def info():
-    return {"model": "Quadratic Discriminant Analysis (QDA)"}
+    if submitted:
+        return pd.DataFrame([values], columns=feature_data.columns)
+    return pd.DataFrame()
 
-# Run the app
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+st.set_page_config(page_title="Startup Status Classifier", page_icon="📊")
+st.title("Startup Status Classifier")
+st.write("Enter company information and predict its current startup status.")
+
+try:
+    model_artifact = load_model()
+    model = model_artifact["pipeline"]
+    target_encoder = model_artifact["target_encoder"]
+    feature_columns = tuple(model_artifact["feature_columns"])
+    feature_data = load_feature_data(feature_columns)
+except (FileNotFoundError, OSError, ValueError) as error:
+    st.error(str(error))
+    st.stop()
+
+input_data = build_prediction_input(feature_data)
+if not input_data.empty:
+    prediction_code = model.predict(input_data).astype(int)
+    prediction = target_encoder.inverse_transform(prediction_code)[0]
+    st.success(f"Predicted startup status: {prediction}")
+
+    if hasattr(model, "predict_proba"):
+        probabilities = model.predict_proba(input_data)[0]
+        classes = target_encoder.inverse_transform(model.classes_.astype(int))
+        probability_table = pd.DataFrame(
+            {"Status": classes, "Probability": probabilities}
+        ).sort_values("Probability", ascending=False)
+        st.subheader("Prediction probabilities")
+        st.dataframe(probability_table, hide_index=True, use_container_width=True)
