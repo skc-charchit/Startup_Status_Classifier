@@ -1,50 +1,52 @@
-# Startup Status Classification
+# Startup Status Classifier
 
-## Overview
+A supervised machine-learning project that predicts the current status of a startup from structured company information. The project covers exploratory data analysis, leakage-aware preprocessing, model comparison, held-out evaluation, model serialization, and a Streamlit prediction interface.
 
-This project builds a supervised machine-learning system that predicts a startup's current status from company information.
+## Project Summary
 
-The target column is `status`, with four classes:
+The classifier predicts one of four startup statuses:
 
 - `operating`
 - `acquired`
 - `closed`
 - `ipo`
 
-The project includes exploratory analysis, leakage-aware preprocessing, model comparison, held-out evaluation, model serialization, and a Streamlit frontend.
+The application is designed as a reproducible project demonstration. It is not intended to make unattended investment, credit, hiring, or other high-impact business decisions.
 
-## Repository Structure
+## Key Results and Insights
 
-```text
-.
-├── main.py                         # Streamlit application
-├── pyproject.toml                  # Project dependencies and metadata
-├── uv.lock                         # Locked dependency versions
-├── src/
-│   ├── data/companies.csv          # Source dataset
-│   ├── models/best_model.pkl       # Selected model artifact
-│   └── notebooks/
-│       ├── 00_EDA.ipynb
-│       ├── 01_Data_Preprocessing.ipynb
-│       ├── 02_Model_Training.ipynb
-│       ├── 03_Model_Evaluation.ipynb
-│       └── 04_Deployment.ipynb
-└── README.md
-```
+### Dataset profile
 
-## Machine-Learning Workflow
+The source dataset contains 196,553 company records and 44 columns before feature selection. The target distribution is highly imbalanced:
 
-Run the notebooks in this order:
+| Status | Records | Approx. share |
+| --- | ---: | ---: |
+| `operating` | 183,441 | 93.3% |
+| `acquired` | 9,394 | 4.8% |
+| `closed` | 2,584 | 1.3% |
+| `ipo` | 1,134 | 0.6% |
 
-1. `00_EDA.ipynb`: inspect data quality, class balance, missing values, distributions, correlations, and potential outliers.
-2. `01_Data_Preprocessing.ipynb`: clean the target, remove identifiers and post-outcome fields, split the data, and define preprocessing.
-3. `02_Model_Training.ipynb`: compare logistic regression, decision tree, random forest, and XGBoost using three-fold cross-validation.
-4. `03_Model_Evaluation.ipynb`: evaluate the selected model on the untouched test split using per-class metrics and a confusion matrix.
-5. `04_Deployment.ipynb`: load the serialized artifact and run a prediction smoke test.
+This imbalance means that accuracy alone can be misleading. The training workflow therefore ranks candidate models by macro F1, which gives each status equal weight.
 
-## Data and Feature Policy
+### Modeling insights
 
-The source dataset is `src/data/companies.csv`. The model uses 14 features:
+- The current training workflow compares logistic regression, decision tree, random forest, and XGBoost classifiers.
+- The selected model in the current project configuration is a `RandomForestClassifier`.
+- Numeric values are median-imputed and standardized.
+- Categorical values are filled with the most frequent value and one-hot encoded.
+- All preprocessing is stored inside the fitted model pipeline, which keeps training and inference behavior consistent.
+- Identifiers, URLs, names, descriptions, and other non-generalizable fields are excluded.
+- `closed_at` and `ROI` are excluded because they can contain information that is only known after the startup outcome and could leak the target.
+
+### Conclusions
+
+The project demonstrates a complete end-to-end classification workflow and provides a usable local prediction interface. The strongest practical conclusions are that class imbalance must be addressed during model selection, leakage prevention is essential for this target, and per-class recall and F1 are more informative than a single aggregate accuracy score.
+
+The model should be treated as a baseline for experimentation. Before production use, it needs time-aware validation, stronger minority-class analysis, calibration checks, monitoring for data drift, and a clearly defined business decision threshold.
+
+## Feature Contract
+
+The deployed model expects these 14 input features:
 
 ```text
 category_code, founded_at, country_code, state_code, city, region,
@@ -52,100 +54,113 @@ investment_rounds, invested_companies, funding_rounds, funding_total_usd,
 milestones, relationships, lat, lng
 ```
 
-The following information is excluded from the model:
+The target column is `status`. The model artifact also stores the target encoder and expected feature names so that the application can return readable status labels and construct inputs in the correct order.
 
-- identifiers and URLs that do not generalize as business signals
-- names and free-text descriptions
-- the target column, `status`
-- `closed_at` and `ROI`, because they may be known only after the outcome and could leak the target
-
-Numeric features are median-imputed and standardized. Categorical features are filled with their most frequent value and one-hot encoded. These transformations are stored inside the model pipeline.
-
-## Model Selection
-
-The classes are imbalanced, so the training notebook ranks models by macro F1. Macro F1 gives each status class equal importance instead of allowing the majority class to dominate the score.
-
-The current selected model is `random_forest` (`RandomForestClassifier`). The saved artifact contains:
-
-- the preprocessing and classifier pipeline
-- the target-label encoder
-- the expected feature names
-- the selected model name
-
-The artifact is stored at:
+## Repository Structure
 
 ```text
+.
+├── main.py                         # Streamlit application
+├── pyproject.toml                  # Project metadata and dependencies
+├── uv.lock                         # Locked dependency versions
+├── README.md                       # Project documentation
+├── LICENSE
+└── src/
+	└── notebooks/
+		├── 00_EDA.ipynb            # Data exploration and class analysis
+		├── 01_Data_Preprocessing.ipynb
+		├── 02_Model_Training.ipynb
+		├── 03_Model_Evaluation.ipynb
+		└── 04_Deployment.ipynb
+```
+
+The source dataset and trained model are intentionally excluded from version control because they are large or generated artifacts:
+
+```text
+src/data/companies.csv
 src/models/best_model.pkl
 ```
 
-Keeping these objects together ensures that training-time preprocessing is reused during prediction. A separate scaler file is not required.
+The notebooks expect the dataset at `src/data/companies.csv`. The Streamlit application expects the serialized model at `src/models/best_model.pkl`. These files must be supplied locally or generated by running the relevant notebooks before the application can run successfully.
 
-## Environment Setup
+## Machine-Learning Workflow
 
-This project requires Python 3.12 or newer. Install the locked dependencies with:
+Run the notebooks in order:
+
+1. **EDA** (`00_EDA.ipynb`) examines data quality, missing values, feature distributions, class balance, and correlations.
+2. **Preprocessing** (`01_Data_Preprocessing.ipynb`) filters valid target classes, removes identifiers and leakage-prone fields, creates train/test splits, and defines the feature contract.
+3. **Training** (`02_Model_Training.ipynb`) builds preprocessing pipelines, compares four classifiers with three-fold cross-validation, selects the model with the best mean macro F1, and saves the model artifact.
+4. **Evaluation** (`03_Model_Evaluation.ipynb`) evaluates the saved model on held-out data using per-class precision, recall, F1, and a confusion matrix.
+5. **Deployment** (`04_Deployment.ipynb`) loads the serialized artifact and runs a prediction smoke test.
+
+The train/test split is kept separate from preprocessing by placing imputers, scaling, and encoding inside each scikit-learn pipeline. This reduces the risk of test-set information influencing training transformations.
+
+## Installation
+
+### Requirements
+
+- Python 3.12 or newer
+- [`uv`](https://docs.astral.sh/uv/)
+- The source dataset at `src/data/companies.csv`
+
+Install the locked dependencies from the project root:
 
 ```bash
 uv sync
 ```
 
-Use the project virtual environment as the kernel when opening the notebooks.
+Use the project virtual environment as the Jupyter kernel when running the notebooks.
 
-## Run the Streamlit Application
+## Training the Model
 
-Start the local frontend with:
+After placing the dataset at `src/data/companies.csv`, run the notebooks in the workflow order above. The training notebook creates:
+
+```text
+src/models/best_model.pkl
+```
+
+The artifact contains:
+
+- the fitted preprocessing and classifier pipeline
+- the target-label encoder
+- the expected feature names
+- the selected model name
+
+Do not load pickle files from untrusted sources. Pickle deserialization can execute arbitrary code.
+
+## Running the Streamlit App
+
+Once the model artifact exists, start the application with:
 
 ```bash
 uv run streamlit run main.py
 ```
 
-Then open the local URL shown in the terminal, usually:
+Open the local URL printed by Streamlit, usually `http://localhost:8501`. The interface creates controls from the stored feature contract and displays the predicted status and class probabilities.
 
-```text
-http://localhost:8501
-```
+## Validation Guidance
 
-The application loads `src/models/best_model.pkl`, creates input controls for the stored feature contract, and displays the predicted status and class probabilities.
+When reviewing a model run, inspect:
 
-## Local Demo Reference
+- mean cross-validated macro F1 used for model selection
+- per-class precision, recall, and F1 on held-out data
+- the confusion matrix, especially errors involving `closed` and `ipo`
+- the effect of missing values and rare categorical levels
+- whether the evaluation split reflects the intended deployment population
 
-The following values come from the first row of the project dataset and can be entered into the Streamlit form:
+The current workflow uses a conventional held-out split. A time-based split would be a stronger validation design if the model is intended to predict future startup outcomes.
 
-| Field | Demo value |
-| --- | --- |
-| Category code | `web` |
-| Founded at | `2005-10-17` |
-| Country code | `USA` |
-| State code | `WA` |
-| City | `Seattle` |
-| Region | `Seattle` |
-| Investment rounds | leave at the default value or use `1` |
-| Invested companies | leave at the default value or use `1` |
-| Funding rounds | `3` |
-| Funding total USD | `39750000` |
-| Milestones | `5` |
-| Relationships | `17` |
-| Latitude | `47.6062095` |
-| Longitude | `-122.3320708` |
+## Limitations and Future Improvements
 
-For this example, the current saved model predicts:
+- The classes are severely imbalanced, especially `ipo` and `closed`.
+- A random split may overstate performance when company records have temporal or organizational dependencies.
+- Historical startup data may not represent current markets, sectors, or funding conditions.
+- The application reports probabilities, but those probabilities are not documented as calibrated.
+- The repository does not include automated tests or a tracked model registry.
+- Reproducible deployment requires separately providing the ignored dataset and model artifact.
 
-```text
-acquired
-```
+Potential next steps include time-aware validation, class-specific error analysis, probability calibration, hyperparameter tuning, drift monitoring, and automated tests for the feature contract and prediction path.
 
-The missing investment values are intentional. The preprocessing pipeline handles missing numeric values with median imputation.
+## License
 
-## Validation
-
-Before using the model, review the evaluation notebook rather than relying on accuracy alone. Check:
-
-- macro F1 across all classes
-- per-class precision, recall, and F1
-- the confusion matrix
-- whether the model performs adequately for minority classes
-
-The model is suitable as a project demonstration and should be monitored and revalidated before use in a production decision system.
-
-## To Run
-
- uv run streamlit run main.py
+See [LICENSE](LICENSE).
